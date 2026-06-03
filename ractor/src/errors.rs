@@ -102,6 +102,18 @@ impl Display for ActorErr {
 
 /// A messaging error has occurred
 pub enum MessagingErr<T> {
+    /// The bounded mailbox of the target actor is at capacity. The send was
+    /// REJECTED (graceful backpressure) — the channel itself is still healthy
+    /// and a later attempt may succeed. Distinct from [`Self::SendErr`] which
+    /// indicates the channel is CLOSED (actor is dead). Surfaced when a
+    /// caller uses `try_send` against a bounded mailbox; with the default
+    /// unbounded mailbox this variant is never produced.
+    ///
+    /// Includes the message which failed to send so the caller can retry
+    /// (with backoff) or escalate (to supervisor restart) per their backpressure
+    /// policy.
+    Saturated(T),
+
     /// The channel you're trying to send a message too has been dropped/closed.
     /// If you're sending to an [crate::ActorCell] then that means the actor has died
     /// (failure or not).
@@ -128,6 +140,7 @@ impl<T> MessagingErr<T> {
         F: FnOnce(T) -> U,
     {
         match self {
+            MessagingErr::Saturated(err) => MessagingErr::Saturated(mapper(err)),
             MessagingErr::SendErr(err) => MessagingErr::SendErr(mapper(err)),
             MessagingErr::ChannelClosed => MessagingErr::ChannelClosed,
             MessagingErr::InvalidActorType => MessagingErr::InvalidActorType,
@@ -138,6 +151,7 @@ impl<T> MessagingErr<T> {
 impl<T> std::fmt::Debug for MessagingErr<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Saturated(_) => write!(f, "Saturated"),
             Self::SendErr(_) => write!(f, "SendErr"),
             Self::ChannelClosed => write!(f, "RecvErr"),
             Self::InvalidActorType => write!(f, "InvalidActorType"),
@@ -165,7 +179,7 @@ impl<T> From<tokio::sync::mpsc::error::TrySendError<T>> for MessagingErr<T> {
     fn from(e: tokio::sync::mpsc::error::TrySendError<T>) -> Self {
         match e {
             tokio::sync::mpsc::error::TrySendError::Closed(c) => Self::SendErr(c),
-            tokio::sync::mpsc::error::TrySendError::Full(c) => Self::SendErr(c),
+            tokio::sync::mpsc::error::TrySendError::Full(c) => Self::Saturated(c),
         }
     }
 }
@@ -181,6 +195,9 @@ impl<T> Display for MessagingErr<T> {
             }
             Self::SendErr(_) => {
                 write!(f, "Messaging failed to enqueue the message to the specified actor, the actor is likely terminated")
+            }
+            Self::Saturated(_) => {
+                write!(f, "Messaging failed because the actor's bounded mailbox is at capacity; the channel is healthy and the message can be retried (graceful backpressure)")
             }
         }
     }
@@ -205,7 +222,10 @@ impl<T> RactorErr<T> {
     ///
     /// Returns [true] if the error contains a message payload of type `T`, [false] otherwise.
     pub fn has_message(&self) -> bool {
-        matches!(self, Self::Messaging(MessagingErr::SendErr(_)))
+        matches!(
+            self,
+            Self::Messaging(MessagingErr::SendErr(_)) | Self::Messaging(MessagingErr::Saturated(_))
+        )
     }
     /// Try and extract the message payload from the contained error. This consumes the
     /// [RactorErr] instance in order to not have require cloning the message payload.
@@ -213,10 +233,10 @@ impl<T> RactorErr<T> {
     ///
     /// Returns [Some(`T`)] if there is a message payload, [None] otherwise.
     pub fn try_get_message(self) -> Option<T> {
-        if let Self::Messaging(MessagingErr::SendErr(msg)) = self {
-            Some(msg)
-        } else {
-            None
+        match self {
+            Self::Messaging(MessagingErr::SendErr(msg)) => Some(msg),
+            Self::Messaging(MessagingErr::Saturated(msg)) => Some(msg),
+            _ => None,
         }
     }
 
