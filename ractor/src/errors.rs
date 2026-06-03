@@ -102,6 +102,18 @@ impl Display for ActorErr {
 
 /// A messaging error has occurred
 pub enum MessagingErr<T> {
+    /// The bounded mailbox of the target actor is at capacity. The send was
+    /// REJECTED (graceful backpressure) — the channel itself is still healthy
+    /// and a later attempt may succeed. Distinct from [`Self::SendErr`] which
+    /// indicates the channel is CLOSED (actor is dead). Surfaced when a
+    /// caller uses `try_send` against a bounded mailbox; with the default
+    /// unbounded mailbox this variant is never produced.
+    ///
+    /// Includes the message which failed to send so the caller can retry
+    /// (with backoff) or escalate (to supervisor restart) per their backpressure
+    /// policy.
+    Saturated(T),
+
     /// The channel you're trying to send a message too has been dropped/closed.
     /// If you're sending to an [crate::ActorCell] then that means the actor has died
     /// (failure or not).
@@ -165,7 +177,7 @@ impl<T> From<tokio::sync::mpsc::error::TrySendError<T>> for MessagingErr<T> {
     fn from(e: tokio::sync::mpsc::error::TrySendError<T>) -> Self {
         match e {
             tokio::sync::mpsc::error::TrySendError::Closed(c) => Self::SendErr(c),
-            tokio::sync::mpsc::error::TrySendError::Full(c) => Self::SendErr(c),
+            tokio::sync::mpsc::error::TrySendError::Full(c) => Self::Saturated(c),
         }
     }
 }
