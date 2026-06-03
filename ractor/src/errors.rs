@@ -140,6 +140,7 @@ impl<T> MessagingErr<T> {
         F: FnOnce(T) -> U,
     {
         match self {
+            MessagingErr::Saturated(err) => MessagingErr::Saturated(mapper(err)),
             MessagingErr::SendErr(err) => MessagingErr::SendErr(mapper(err)),
             MessagingErr::ChannelClosed => MessagingErr::ChannelClosed,
             MessagingErr::InvalidActorType => MessagingErr::InvalidActorType,
@@ -150,6 +151,7 @@ impl<T> MessagingErr<T> {
 impl<T> std::fmt::Debug for MessagingErr<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Saturated(_) => write!(f, "Saturated"),
             Self::SendErr(_) => write!(f, "SendErr"),
             Self::ChannelClosed => write!(f, "RecvErr"),
             Self::InvalidActorType => write!(f, "InvalidActorType"),
@@ -194,6 +196,9 @@ impl<T> Display for MessagingErr<T> {
             Self::SendErr(_) => {
                 write!(f, "Messaging failed to enqueue the message to the specified actor, the actor is likely terminated")
             }
+            Self::Saturated(_) => {
+                write!(f, "Messaging failed because the actor's bounded mailbox is at capacity; the channel is healthy and the message can be retried (graceful backpressure)")
+            }
         }
     }
 }
@@ -217,7 +222,10 @@ impl<T> RactorErr<T> {
     ///
     /// Returns [true] if the error contains a message payload of type `T`, [false] otherwise.
     pub fn has_message(&self) -> bool {
-        matches!(self, Self::Messaging(MessagingErr::SendErr(_)))
+        matches!(
+            self,
+            Self::Messaging(MessagingErr::SendErr(_)) | Self::Messaging(MessagingErr::Saturated(_))
+        )
     }
     /// Try and extract the message payload from the contained error. This consumes the
     /// [RactorErr] instance in order to not have require cloning the message payload.
@@ -225,10 +233,10 @@ impl<T> RactorErr<T> {
     ///
     /// Returns [Some(`T`)] if there is a message payload, [None] otherwise.
     pub fn try_get_message(self) -> Option<T> {
-        if let Self::Messaging(MessagingErr::SendErr(msg)) = self {
-            Some(msg)
-        } else {
-            None
+        match self {
+            Self::Messaging(MessagingErr::SendErr(msg)) => Some(msg),
+            Self::Messaging(MessagingErr::Saturated(msg)) => Some(msg),
+            _ => None,
         }
     }
 
