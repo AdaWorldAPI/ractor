@@ -112,6 +112,37 @@ pub enum MessagingErr<T> {
     /// Includes the message which failed to send so the caller can retry
     /// (with backoff) or escalate (to supervisor restart) per their backpressure
     /// policy.
+    ///
+    /// # Example — recovering the payload and applying exponential backoff
+    ///
+    /// The recovered message can be passed back to a subsequent send. The
+    /// [`crate::RactorErr::try_get_message`] helper consumes the wrapped
+    /// `RactorErr` and returns the payload for both `Saturated` and `SendErr`
+    /// — the discrimination is on `RactorErr::has_message()` / via direct
+    /// pattern match.
+    ///
+    /// ```no_run
+    /// use ractor::errors::MessagingErr;
+    ///
+    /// /// Decide whether to retry (mailbox full, recoverable) or escalate
+    /// /// (channel closed, fatal). Mirrors the bardioc B1 substrate-b
+    /// /// backpressure policy described in the variant's PR.
+    /// fn classify_send_err<T>(e: MessagingErr<T>) -> Decision<T> {
+    ///     match e {
+    ///         MessagingErr::Saturated(msg) => Decision::Retry(msg),
+    ///         MessagingErr::SendErr(msg) => Decision::Escalate(msg),
+    ///         MessagingErr::ChannelClosed | MessagingErr::InvalidActorType => {
+    ///             Decision::Drop
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// enum Decision<T> {
+    ///     Retry(T),     // mailbox full — backoff + try_send again
+    ///     Escalate(T),  // channel closed — supervisor restart with payload
+    ///     Drop,         // no payload to recover
+    /// }
+    /// ```
     Saturated(T),
 
     /// The channel you're trying to send a message too has been dropped/closed.
