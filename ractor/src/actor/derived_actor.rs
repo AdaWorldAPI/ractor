@@ -220,6 +220,16 @@ impl<TMessage: Message> ActorRef<TMessage> {
                     };
                     MessagingErr::SendErr(err)
                 }
+                MessagingErr::Saturated(returned) => {
+                    let Ok(err) = TFrom::try_from(returned) else {
+                        panic!(
+                            "Failed to deconvert message from {} to {} when sending to: {actor_ref:?}",
+                            std::any::type_name::<TMessage>(),
+                            std::any::type_name::<TFrom>()
+                        );
+                    };
+                    MessagingErr::Saturated(err)
+                }
                 MessagingErr::ChannelClosed => MessagingErr::ChannelClosed,
                 MessagingErr::InvalidActorType => MessagingErr::InvalidActorType,
             })

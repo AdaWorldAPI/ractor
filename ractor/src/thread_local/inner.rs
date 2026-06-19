@@ -525,6 +525,14 @@ impl<TActor: ThreadLocalActor> ThreadLocalActorRuntime<TActor> {
                     Signal::Kill,
                 )))
             }
+            Err(MessagingErr::Saturated(_)) => {
+                // not possible on the receive side (Saturated is a send-side
+                // backpressure error). Treat like a channel closed.
+                Ok(ActorLoopResult::signal(Self::handle_signal(
+                    myself.clone(),
+                    Signal::Kill,
+                )))
+            }
         }
     }
 
